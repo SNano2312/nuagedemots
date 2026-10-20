@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nuage de mots</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+:root{--fond:#eef2f0;--encre:#1d2b28;--doux:#5d706b;--accent:#0a7c72;--accent-f:#065a53;--trait:#d3dcd9}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.4 "Segoe UI",system-ui,sans-serif;color:var(--encre);background:var(--fond);height:100vh;height:100dvh;display:flex;flex-direction:column}
+header,footer{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:10px 14px;background:#fff}
+header{border-bottom:1px solid var(--trait)}
+footer{border-top:1px solid var(--trait)}
+h1{font-size:16px;margin:0}
+h1 small{font-weight:400;color:var(--doux)}
+#q{flex:1 1 100%;font-size:22px;margin:0}
+input,button,textarea{font:inherit}
+input,textarea{padding:6px 8px;border:1px solid var(--trait);border-radius:4px}
+button{cursor:pointer;border:0;border-radius:4px;padding:6px 12px;background:var(--accent);color:#fff}
+button:hover{background:var(--accent-f)}
+button:disabled{background:#9db5b1;cursor:default}
+button.sec{background:#fff;color:var(--accent-f);border:1px solid var(--accent)}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+#etat{font-weight:600;color:var(--accent-f)}
+#msg{min-height:24px;padding:2px 14px;color:#a02020}
+main{flex:1;min-height:0;display:flex;flex-direction:column;padding:8px 14px;overflow:auto}
+svg{width:100%;height:auto;max-height:100%;background:#fff;border:1px solid var(--trait);border-radius:6px}
+#vide{margin:auto;color:var(--doux)}
+#panneau{display:none;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 14px;background:#fff;border-top:1px solid var(--trait);max-height:32vh;overflow:auto}
+body.admin #panneau{display:flex}
+#liste{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:4px}
+.chip{display:inline-flex;align-items:center;gap:4px;background:#f3f6f5;border:1px solid var(--trait);border-radius:12px;padding:1px 4px 1px 8px}
+.chip button{background:none;color:#a02020;padding:0 4px}
+#sortie{flex:1 1 100%;height:120px;font:13px/1.4 Consolas,monospace}
+#sortie[hidden]{display:none}
+body.proj header>*:not(h1):not(#q):not(#etat):not(#projBtn){display:none}
+body.proj footer,body.proj #panneau{display:none!important}
+body.proj #q{font-size:2.2em}
+@media (max-width:700px){input,textarea{font-size:16px}#q{font-size:18px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Nuage de mots <small>v1</small></h1>
+  <label>Prénom <input id="pseudo" size="12"></label>
+  <label><input type="checkbox" id="isAnim"> Animateur</label>
+  <button type="button" id="projBtn" class="sec">Projection</button>
+  <span id="etat"></span>
+  <h2 id="q"></h2>
+</header>
+<div id="msg" role="status"></div>
+<main>
+  <svg id="svg" viewBox="0 0 1000 520" role="img" aria-label="Nuage de mots"></svg>
+  <p id="vide">Aucun mot pour l’instant.</p>
+</main>
+<footer>
+  <form id="f">
+    <input id="mot" maxlength="40" size="28" placeholder="Ton mot ou ta courte expression" aria-label="Ton mot">
+    <button id="ajout">Envoyer</button>
+  </form>
+  <span id="reste"></span>
+</footer>
+<section id="panneau">
+  <input id="nq" size="40" placeholder="Question posée aux participants" aria-label="Question">
+  <button type="button" id="dq">Définir la question</button>
+  <button type="button" id="tg" class="sec"></button>
+  <button type="button" id="exp" class="sec">Exporter</button>
+  <button type="button" id="vider" class="sec">Vider le nuage</button>
+  <div id="liste"></div>
+  <textarea id="sortie" readonly hidden aria-label="Liste des mots"></textarea>
+</section>
+
+<script>
+const MAX_MOTS = 3;   // mots par personne (sans effet si la colonne Auteur n'est pas associée)
+const PAL = ['#0a7c72', '#1f5fa8', '#b4492d', '#6b4e9b', '#8a6d00', '#2e7d32', '#a02060'];
+let recs = [], map = {}, question = '', ouvert = true;
+let me = localStorage.getItem('nm_me') || '', anim = localStorage.getItem('nm_anim') === '1';
+const $ = s => document.querySelector(s);
+const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+const say = t => { $('#msg').textContent = t || ''; if (t) setTimeout(() => $('#msg').textContent = '', 5000); };
+const erreur = e => say('Écriture impossible : ' + ((e && e.message) || e));
+const act = async a => grist.docApi.applyUserActions(a(await grist.selectedTable.getTableId()));
+const raw = f => Object.fromEntries(Object.entries(f).filter(([k]) => map[k]).map(([k, v]) => [map[k], v]));
+const cle = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9' ]/g, '').trim().replace(/\s+/g, ' ');
+
+grist.ready({
+  requiredAccess: 'full',
+  columns: [
+    { name: 'Mot', title: 'Mot', type: 'Text' },
+    { name: 'Auteur', title: 'Auteur (facultatif)', type: 'Text', optional: true }
+  ]
+});
+grist.onRecords((rows, m) => { map = m || {}; recs = grist.mapColumnNames(rows) || []; render(); });
+grist.onOptions(o => {
+  o = o || {}; question = o.question || ''; ouvert = o.ouvert !== false;
+  if (document.activeElement !== $('#nq')) $('#nq').value = question;
+  render();
+});
+
+// Mots regroupés sans tenir compte de la casse, des accents ni de la ponctuation
+function groupes() {
+  const m = new Map();
+  recs.forEach(r => {
+    const k = cle(r.Mot || ''); if (!k) return;
+    const g = m.get(k) || { k, n: 0, formes: {}, ids: [] }, f = (r.Mot || '').trim();
+    g.formes[f] = (g.formes[f] || 0) + 1; g.n++; g.ids.push(r.id); m.set(k, g);
+  });
+  return [...m.values()]
+    .map(g => ({ ...g, texte: Object.entries(g.formes).sort((a, b) => b[1] - a[1])[0][0] }))
+    .sort((a, b) => b.n - a.n || a.k.localeCompare(b.k));
+}
+
+// Placement en spirale : chaque mot est posé au premier endroit libre
+function nuage(items) {
+  const W = 1000, H = 520, svg = $('#svg'), NS = 'http://www.w3.org/2000/svg';
+  svg.textContent = '';
+  $('#vide').hidden = items.length > 0; svg.style.display = items.length ? '' : 'none';
+  if (!items.length) return;
+  const ctx = document.createElement('canvas').getContext('2d');
+  const max = items[0].n, min = items[items.length - 1].n;
+  const taille = n => max === min ? 44 : 18 + 54 * Math.sqrt((n - min) / (max - min));
+  const places = [];
+  items.forEach((it, k) => {
+    const fs = taille(it.n); ctx.font = `600 ${fs}px "Segoe UI", system-ui, sans-serif`;
+    const w = ctx.measureText(it.texte).width + 10, h = fs * 1.15;
+    for (let t = 0; t < 400; t += 0.12) {
+      const x = W / 2 + 3.5 * t * Math.cos(t) - w / 2, y = H / 2 + 2.2 * t * Math.sin(t) - h / 2;
+      if (x < 2 || y < 2 || x + w > W - 2 || y + h > H - 2) continue;
+      if (places.every(p => x + w < p.x || p.x + p.w < x || y + h < p.y || p.y + p.h < y)) { places.push({ it, k, x, y, h, w, fs }); break; }
+    }
+  });
+  places.forEach(p => {
+    const tx = document.createElementNS(NS, 'text'), ti = document.createElementNS(NS, 'title');
+    tx.setAttribute('x', p.x + 5); tx.setAttribute('y', p.y + p.h * 0.8);
+    tx.setAttribute('font-size', p.fs); tx.setAttribute('font-weight', 600);
+    tx.setAttribute('fill', PAL[p.k % PAL.length]);
+    tx.textContent = p.it.texte; ti.textContent = p.it.n + ' fois';
+    tx.append(ti); svg.append(tx);
+  });
+}
+
+function render() {
+  document.body.classList.toggle('admin', anim);
+  $('#isAnim').checked = anim;
+  $('#q').textContent = question || (anim ? 'Définis la question ci-dessous.' : 'En attente de la question…');
+  $('#etat').textContent = ouvert ? 'Saisie ouverte' : 'Saisie fermée';
+  $('#tg').textContent = ouvert ? 'Fermer la saisie' : 'Ouvrir la saisie';
+  $('#mot').disabled = $('#ajout').disabled = !ouvert;
+  const g = groupes(), mes = map.Auteur && me ? recs.filter(r => r.Auteur === me).length : 0;
+  $('#reste').textContent = map.Auteur && me ? `Mots restants : ${Math.max(0, MAX_MOTS - mes)} / ${MAX_MOTS}` : '';
+  nuage(g.slice(0, 60));
+  const l = $('#liste'); l.textContent = '';
+  if (anim) g.forEach(x => {   // modération : retirer un mot (toutes ses occurrences)
+    const c = el('span', 'chip', x.texte + ' (' + x.n + ')'), b = el('button', null, '\u00D7');
+    b.title = 'Supprimer ce mot'; b.onclick = () => act(tb => [['BulkRemoveRecord', tb, x.ids]]).catch(erreur);
+    c.append(b); l.append(c);
+  });
+}
+
+$('#pseudo').value = me;
+$('#pseudo').addEventListener('change', e => { me = e.target.value.replace(/,/g, ' ').trim(); localStorage.setItem('nm_me', me); render(); });
+$('#isAnim').addEventListener('change', e => { anim = e.target.checked; localStorage.setItem('nm_anim', anim ? '1' : '0'); render(); });
+
+$('#f').addEventListener('submit', e => {
+  e.preventDefault();
+  const t = $('#mot').value.trim().slice(0, 40);
+  if (!t) return;
+  if (!ouvert) return say('La saisie est fermée.');
+  if (!me) { $('#pseudo').focus(); return say('Indique ton prénom avant de participer.'); }
+  if (map.Auteur && recs.filter(r => r.Auteur === me).length >= MAX_MOTS) return say(`Tu as déjà proposé ${MAX_MOTS} mots.`);
+  act(tb => [['AddRecord', tb, null, raw({ Mot: t, Auteur: me })]]).catch(erreur);
+  $('#mot').value = '';
+});
+
+$('#dq').onclick = () => grist.setOption('question', $('#nq').value.trim());
+$('#tg').onclick = () => grist.setOption('ouvert', !ouvert);
+$('#exp').onclick = () => {
+  const s = $('#sortie');
+  s.value = groupes().map(g => g.texte + '\t' + g.n).join('\n'); s.hidden = !s.hidden;
+  if (!s.hidden) { s.focus(); s.select(); }
+};
+$('#vider').onclick = e => {   // confirmation en deux clics
+  const b = e.target, base = 'Vider le nuage';
+  if (!b.dataset.sur) {
+    b.dataset.sur = '1'; b.textContent = 'Confirmer l\u2019effacement';
+    return void setTimeout(() => { delete b.dataset.sur; b.textContent = base; }, 4000);
+  }
+  delete b.dataset.sur; b.textContent = base;
+  if (recs.length) act(tb => [['BulkRemoveRecord', tb, recs.map(r => r.id)]]).catch(erreur);
+};
+
+const proj = on => { document.body.classList.toggle('proj', on); $('#projBtn').textContent = on ? 'Quitter la projection' : 'Projection'; };
+$('#projBtn').onclick = () => proj(!document.body.classList.contains('proj'));
+document.addEventListener('keydown', e => { if (e.key === 'Escape') proj(false); });
+</script>
+</body>
+</html>
