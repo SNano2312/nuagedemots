@@ -42,7 +42,7 @@ body.proj #q{font-size:2.2em}
 </head>
 <body>
 <header>
-  <h1>Nuage de mots <small>v1</small></h1>
+  <h1>Nuage de mots <small>v1.2</small></h1>
   <label>Prénom <input id="pseudo" size="12"></label>
   <label><input type="checkbox" id="isAnim"> Animateur</label>
   <button type="button" id="projBtn" class="sec">Projection</button>
@@ -68,6 +68,7 @@ body.proj #q{font-size:2.2em}
   <button type="button" id="exp" class="sec">Exporter</button>
   <button type="button" id="vider" class="sec">Vider le nuage</button>
   <div id="liste"></div>
+  <button type="button" id="cop" class="sec" hidden>Copier</button>
   <textarea id="sortie" readonly hidden aria-label="Liste des mots"></textarea>
 </section>
 
@@ -92,11 +93,49 @@ grist.ready({
   ]
 });
 grist.onRecords((rows, m) => { map = m || {}; recs = grist.mapColumnNames(rows) || []; render(); });
-grist.onOptions(o => {
-  o = o || {}; question = o.question || ''; ouvert = o.ouvert !== false;
+function appliquer(o) {
+  question = o.question || ''; ouvert = o.ouvert !== false;
   if (document.activeElement !== $('#nq')) $('#nq').value = question;
-  render();
-});
+}
+grist.onOptions(o => { if (session) return; appliquer(o || {}); render(); });
+// ---- État partagé : table « Etat » si elle existe (protégeable par les règles d'accès), sinon options du widget ----
+const CLE = 'nuage';
+let session = false, rowId = null, lastSess = '', file = Promise.resolve(), attente = 0, courant = {};
+async function chargerEtat() {
+  if (attente > 0) return true;   // des écritures sont en cours : on attend
+  let t;
+  try { t = await grist.docApi.fetchTable('Etat'); } catch (e) { return false; }   // pas de table : mode options
+  session = true; rowId = null; let d = {};
+  (t.Widget || []).forEach((w, i) => {
+    if (w !== CLE) return;
+    rowId = t.id[i]; try { d = JSON.parse(t.Donnees[i] || '{}'); } catch (e) { d = {}; }
+  });
+  const sig = JSON.stringify(d);
+  if (sig === lastSess) return true;
+  lastSess = sig; courant = d; appliquer(d); render();
+  return true;
+}
+async function ecrireEtat(snap) {
+  await grist.docApi.applyUserActions([rowId
+    ? ['UpdateRecord', 'Etat', rowId, { Donnees: snap }]
+    : ['AddRecord', 'Etat', null, { Widget: CLE, Donnees: snap }]]);
+  const t = await grist.docApi.fetchTable('Etat');   // récupère l'identifiant de la ligne créée
+  (t.Widget || []).forEach((w, i) => { if (w === CLE) rowId = t.id[i]; });
+}
+// Les commandes d'animateur passent par opt() : écrites dans la table Etat (si elle existe) ou dans les options
+const opt = (k, v) => {
+  if (!session) return grist.setOption(k, v);
+  courant = { ...courant, [k]: v }; appliquer(courant); render();
+  const snap = JSON.stringify(courant); attente++;
+  file = file.then(() => ecrireEtat(snap)).catch(e => {
+    const m = String((e && e.message) || e);
+    say(/access|rule|denied|permission|blocked/i.test(m) ? 'Cette commande est réservée aux animateurs.' : 'Écriture impossible : ' + m);
+  }).then(() => { attente--; if (attente === 0) { lastSess = ''; return chargerEtat(); } });
+  return file;
+};
+chargerEtat();
+setInterval(() => { if (session) chargerEtat(); }, 2500);
+
 
 // Mots regroupés sans tenir compte de la casse, des accents ni de la ponctuation
 function groupes() {
@@ -173,12 +212,19 @@ $('#f').addEventListener('submit', e => {
   $('#mot').value = '';
 });
 
-$('#dq').onclick = () => grist.setOption('question', $('#nq').value.trim());
-$('#tg').onclick = () => grist.setOption('ouvert', !ouvert);
+$('#dq').onclick = () => opt('question', $('#nq').value.trim());
+$('#tg').onclick = () => opt('ouvert', !ouvert);
 $('#exp').onclick = () => {
   const s = $('#sortie');
   s.value = groupes().map(g => g.texte + '\t' + g.n).join('\n'); s.hidden = !s.hidden;
+  $('#cop').hidden = s.hidden;
   if (!s.hidden) { s.focus(); s.select(); }
+};
+$('#cop').onclick = async () => {
+  const s = $('#sortie'), flash = t => { $('#cop').textContent = t; setTimeout(() => $('#cop').textContent = 'Copier', 2500); };
+  s.select();
+  try { await navigator.clipboard.writeText(s.value); flash('Copié \u2713'); }
+  catch (e) { flash(document.execCommand('copy') ? 'Copié \u2713' : 'Ctrl+C pour copier'); }
 };
 $('#vider').onclick = e => {   // confirmation en deux clics
   const b = e.target, base = 'Vider le nuage';
