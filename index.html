@@ -76,7 +76,7 @@ body.proj #q{font-size:2.2em}
 const MAX_MOTS = 3;   // mots par personne (sans effet si la colonne Auteur n'est pas associée)
 const PAL = ['#0a7c72', '#1f5fa8', '#b4492d', '#6b4e9b', '#8a6d00', '#2e7d32', '#a02060'];
 let recs = [], map = {}, question = '', ouvert = true;
-let me = localStorage.getItem('nm_me') || '', anim = localStorage.getItem('nm_anim') === '1';
+let me = localStorage.getItem('grist_prenom') || localStorage.getItem('nm_me') || '', anim = localStorage.getItem('nm_anim') === '1';
 const $ = s => document.querySelector(s);
 const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
 const say = t => { $('#msg').textContent = t || ''; if (t) setTimeout(() => $('#msg').textContent = '', 5000); };
@@ -198,7 +198,7 @@ function render() {
 }
 
 $('#pseudo').value = me;
-$('#pseudo').addEventListener('change', e => { me = e.target.value.replace(/,/g, ' ').trim(); localStorage.setItem('nm_me', me); render(); });
+$('#pseudo').addEventListener('change', e => { me = e.target.value.replace(/,/g, ' ').trim(); localStorage.setItem('grist_prenom', me); localStorage.setItem('nm_me', me); render(); });
 $('#isAnim').addEventListener('change', e => { anim = e.target.checked; localStorage.setItem('nm_anim', anim ? '1' : '0'); render(); });
 
 $('#f').addEventListener('submit', e => {
