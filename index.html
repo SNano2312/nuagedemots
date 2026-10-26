@@ -216,7 +216,7 @@ $('#dq').onclick = () => opt('question', $('#nq').value.trim());
 $('#tg').onclick = () => opt('ouvert', !ouvert);
 $('#exp').onclick = () => {
   const s = $('#sortie');
-  s.value = groupes().map(g => g.texte + '\t' + g.n).join('\n'); s.hidden = !s.hidden;
+  s.value = ['Mot\tOccurrences', ...groupes().map(g => g.texte + '\t' + g.n)].join('\n'); s.hidden = !s.hidden;
   $('#cop').hidden = s.hidden;
   if (!s.hidden) { s.focus(); s.select(); }
 };
